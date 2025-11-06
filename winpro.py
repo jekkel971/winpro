@@ -3,249 +3,206 @@ import pandas as pd
 import numpy as np
 import json
 import os
-import shutil
-from datetime import datetime
 import matplotlib.pyplot as plt
+from datetime import datetime
+import shutil
 
-# ---------------- CONFIG ----------------
-st.set_page_config(page_title="Analyseur de matchs avancé", layout="wide")
-st.title("⚽ Analyseur de matchs – Probabilités réalistes avec cotes")
-
-# ---------------- FICHIERS ET SAUVEGARDES ----------------
-FORM_FILE = "teams_form.json"
+# ------------------- FICHIERS & SAUVEGARDES -------------------
+TEAMS_FILE = "teams_form.json"
+HISTORIQUE_FILE = "historique_pronos.json"
 BACKUP_DIR = "sauvegardes"
-HISTORY_FILE = "pronostics_history.json"
-
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
-# Sauvegarde automatique des équipes au démarrage
-if os.path.exists(FORM_FILE):
+# Création automatique d'une sauvegarde de teams_form.json
+if os.path.exists(TEAMS_FILE):
     date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     backup_file = os.path.join(BACKUP_DIR, f"teams_form_backup_{date_str}.json")
-    shutil.copy(FORM_FILE, backup_file)
+    shutil.copy(TEAMS_FILE, backup_file)
 
-# Charger équipes existantes
-if os.path.exists(FORM_FILE):
-    with open(FORM_FILE,"r") as f:
-        teams_form = json.load(f)
+# ------------------- CHARGEMENT DES DONNÉES -------------------
+if os.path.exists(TEAMS_FILE):
+    with open(TEAMS_FILE, "r", encoding="utf-8") as f:
+        teams_data = json.load(f)
 else:
-    teams_form = {}
+    teams_data = {}
 
-# Charger historique pronostics
-if os.path.exists(HISTORY_FILE):
-    with open(HISTORY_FILE,"r") as f:
-        pronostics_history = json.load(f)
+if os.path.exists(HISTORIQUE_FILE):
+    with open(HISTORIQUE_FILE, "r", encoding="utf-8") as f:
+        historique = json.load(f)
 else:
-    pronostics_history = []
+    historique = []
 
-# ---------------- DATAFRAME MATCHES ----------------
-if "matches_df" not in st.session_state:
-    st.session_state.matches_df = pd.DataFrame(columns=[
-        "home_team","away_team","cote_home","cote_away",
-        "home_wins","home_draws","home_losses","home_goals_scored","home_goals_against","home_last5",
-        "away_wins","away_draws","away_losses","away_goals_scored","away_goals_against","away_last5",
-        "Winner"
-    ])
+# ------------------- CONFIG STREAMLIT -------------------
+st.set_page_config(page_title="Analyseur de matchs complet", layout="wide")
+st.title("⚽ Analyseur de matchs – Probabilités & suivi pronostics")
 
-# ---------------- SÉLECTION RAPIDE DES ÉQUIPES ----------------
-st.subheader("Sélection rapide des équipes existantes")
-saved_teams = sorted(teams_form.keys())
-if saved_teams:
-    selected_team = st.selectbox("Choisir une équipe existante", saved_teams)
+# ------------------- GESTION DES ÉQUIPES -------------------
+st.header("🧾 Gestion des équipes")
+with st.form("form_teams"):
+    team_name = st.text_input("Nom de l'équipe à ajouter ou mettre à jour")
+    form_last5 = st.text_input("5 derniers matchs (ex: v,v,n,d,v)")
+    goals_scored = st.number_input("Buts marqués", 0, 200, 0)
+    goals_against = st.number_input("Buts encaissés", 0, 200, 0)
+    submitted_team = st.form_submit_button("💾 Enregistrer l'équipe")
+
+if submitted_team and team_name:
+    teams_data[team_name] = {
+        "last5": form_last5.lower(),
+        "goals_scored": goals_scored,
+        "goals_against": goals_against
+    }
+    with open(TEAMS_FILE, "w", encoding="utf-8") as f:
+        json.dump(teams_data, f, indent=2, ensure_ascii=False)
+    st.success(f"✅ {team_name} enregistrée avec succès")
+
+# ------------------- AJOUT DE PRONOSTICS -------------------
+st.header("📊 Ajouter un pronostic")
+if teams_data:
     col1, col2 = st.columns(2)
     with col1:
-        if st.button(f"🏠 Mettre {selected_team} en domicile"):
-            st.session_state.home_team = selected_team
+        home_team = st.selectbox("Équipe Domicile", list(teams_data.keys()))
     with col2:
-        if st.button(f"🛫 Mettre {selected_team} en extérieur"):
-            st.session_state.away_team = selected_team
+        away_team = st.selectbox("Équipe Extérieure", [t for t in teams_data.keys() if t != home_team])
 
-home_team_default = st.session_state.get("home_team", "")
-away_team_default = st.session_state.get("away_team", "")
+    cote_home = st.number_input("Cote Domicile", 1.01, 20.0, 1.5)
+    cote_away = st.number_input("Cote Extérieure", 1.01, 20.0, 2.8)
 
-# ---------------- FORMULAIRE ----------------
-with st.form("match_form", clear_on_submit=True):
-    st.subheader("Équipes et cotes")
-    home_team = st.text_input("Équipe domicile", value=home_team_default)
-    away_team = st.text_input("Équipe extérieure", value=away_team_default)
-    cote_home = st.number_input("Cote domicile", 1.01, 10.0, 1.5)
-    cote_away = st.number_input("Cote extérieure", 1.01, 10.0, 1.5)
+    if st.button("➕ Analyser & Sauvegarder le pronostic"):
+        # ----- Calcul de la probabilité -----
+        def form_score(seq):
+            mapping = {"v":3,"n":1,"d":0}
+            vals = [mapping.get(x.strip(),0) for x in seq.split(",") if x.strip() in mapping]
+            vals = vals[-5:] if len(vals)>5 else vals
+            weights = np.array([5,4,3,2,1])[:len(vals)]
+            return np.dot(vals, weights)/(15 if len(vals)==5 else sum(weights))
 
-    st.subheader("Historique domicile")
-    home_wins = st.number_input("Victoires domicile", 0, 50, 0)
-    home_draws = st.number_input("Nuls domicile", 0, 50, 0)
-    home_losses = st.number_input("Défaites domicile", 0, 50, 0)
-    home_goals_scored = st.number_input("Buts marqués domicile", 0, 200, 0)
-    home_goals_against = st.number_input("Buts encaissés domicile", 0, 200, 0)
-    default_home_last5 = teams_form.get(home_team,"v,v,n,d,d") if home_team else "v,v,n,d,d"
-    home_last5 = st.text_input("5 derniers matchs domicile (v,n,d)", value=default_home_last5)
+        form_home = form_score(teams_data[home_team]["last5"])
+        form_away = form_score(teams_data[away_team]["last5"])
+        p_home_odds = 1 / cote_home
+        p_away_odds = 1 / cote_away
+        prob_home = (p_home_odds * 0.7 + form_home * 0.3)
+        prob_away = (p_away_odds * 0.7 + form_away * 0.3)
+        total = prob_home + prob_away
+        prob_home /= total
+        prob_away /= total
 
-    st.subheader("Historique extérieur")
-    away_wins = st.number_input("Victoires extérieur", 0, 50, 0)
-    away_draws = st.number_input("Nuls extérieur", 0, 50, 0)
-    away_losses = st.number_input("Défaites extérieur", 0, 50, 0)
-    away_goals_scored = st.number_input("Buts marqués extérieur", 0, 200, 0)
-    away_goals_against = st.number_input("Buts encaissés extérieur", 0, 200, 0)
-    default_away_last5 = teams_form.get(away_team,"v,v,n,d,d") if away_team else "v,v,n,d,d"
-    away_last5 = st.text_input("5 derniers matchs extérieur (v,n,d)", value=default_away_last5)
+        winner = home_team if prob_home > prob_away else away_team
+        prob_victoire = round(max(prob_home, prob_away)*100,2)
+        mise = 10
 
-    submitted = st.form_submit_button("➕ Ajouter le match")
+        pronostic = {
+            "home_team": home_team,
+            "away_team": away_team,
+            "cote_home": cote_home,
+            "cote_away": cote_away,
+            "winner_pred": winner,
+            "prob_victoire": prob_victoire,
+            "mise": mise,
+            "resultat": None,
+            "gain": 0
+        }
 
-# ---------------- AJOUT DES DONNÉES ----------------
-if submitted and home_team and away_team:
-    teams_form[home_team] = home_last5.lower()
-    teams_form[away_team] = away_last5.lower()
-    with open(FORM_FILE,"w") as f:
-        json.dump(teams_form,f)
+        historique.append(pronostic)
+        with open(HISTORIQUE_FILE,"w", encoding="utf-8") as f:
+            json.dump(historique,f,indent=2,ensure_ascii=False)
+        st.success(f"✅ Pronostic enregistré : victoire de {winner} ({prob_victoire}%)")
 
-    # Ajout au DataFrame
-    st.session_state.matches_df = pd.concat([
-        st.session_state.matches_df,
-        pd.DataFrame([{
-            "home_team": home_team,"away_team": away_team,
-            "cote_home": cote_home,"cote_away": cote_away,
-            "home_wins": home_wins,"home_draws": home_draws,"home_losses": home_losses,
-            "home_goals_scored": home_goals_scored,"home_goals_against": home_goals_against,"home_last5": home_last5.lower(),
-            "away_wins": away_wins,"away_draws": away_draws,"away_losses": away_losses,
-            "away_goals_scored": away_goals_scored,"away_goals_against": away_goals_against,"away_last5": away_last5.lower()
-        }])
-    ], ignore_index=True)
-    st.success(f"✅ Match ajouté : {home_team} vs {away_team}")
-
-# ---------------- FONCTIONS D’ANALYSE ----------------
-def calculate_form_score(sequence):
-    mapping = {"v":3,"n":1,"d":0}
-    seq = [mapping.get(x.strip(),0) for x in sequence.split(",")]
-    if len(seq)<5: seq+=[0]*(5-len(seq))
-    weights=np.array([5,4,3,2,1])
-    return np.dot(seq,weights)/15
-
-def calculate_prob(home_last5, away_last5, home_goals, home_against, away_goals, away_against, cote_home, cote_away):
-    home_form = calculate_form_score(home_last5)
-    away_form = calculate_form_score(away_last5)
-
-    home_attack = home_goals / max(home_goals+home_against,1)
-    away_attack = away_goals / max(away_goals+away_against,1)
-
-    home_score = 0.5*home_form + 0.25*home_attack + 0.25*(1-away_attack)
-    away_score = 0.5*away_form + 0.25*away_attack + 0.25*(1-home_attack)
-
-    prob_home_cote = 1 / cote_home
-    prob_away_cote = 1 / cote_away
-
-    prob_home = 0.7*home_score + 0.3*prob_home_cote
-    prob_away = 0.7*away_score + 0.3*prob_away_cote
-
-    total = prob_home + prob_away
-    prob_home /= total
-    prob_away /= total
-    return prob_home, prob_away
-
-def analyze(df):
-    df = df.copy()
-    results=[]
-    for _,row in df.iterrows():
-        prob_home, prob_away = calculate_prob(
-            row["home_last5"], row["away_last5"],
-            row["home_goals_scored"], row["home_goals_against"],
-            row["away_goals_scored"], row["away_goals_against"],
-            row["cote_home"], row["cote_away"]
-        )
-        winner = row["home_team"] if prob_home>prob_away else row["away_team"]
-        results.append({
-            "home_team": row["home_team"],
-            "away_team": row["away_team"],
-            "Winner": winner,
-            "Probabilité victoire": round(max(prob_home,prob_away)*100,2),
-            "Score Sécurité": round(abs(prob_home-prob_away)*100,1)
-        })
-    return pd.DataFrame(results)
-
-def update_form_after_match(df_analysis):
-    for idx,row in df_analysis.iterrows():
-        winner = row["Winner"]
-        home_team = row["home_team"]
-        away_team = row["away_team"]
-
-        home_seq = teams_form.get(home_team,"v,v,n,d,d").split(",")[:4]
-        away_seq = teams_form.get(away_team,"v,v,n,d,d").split(",")[:4]
-
-        if winner==home_team:
-            home_seq=["v"]+home_seq
-            away_seq=["d"]+away_seq
-        elif winner==away_team:
-            home_seq=["d"]+home_seq
-            away_seq=["v"]+away_seq
-        else:
-            home_seq=["n"]+home_seq
-            away_seq=["n"]+away_seq
-
-        teams_form[home_team]=",".join(home_seq)
-        teams_form[away_team]=",".join(away_seq)
-
-    with open(FORM_FILE,"w") as f:
-        json.dump(teams_form,f)
-
-# ---------------- AFFICHAGE ANALYSE ----------------
-if len(st.session_state.matches_df)>0:
-    st.subheader("📊 Analyse des matchs")
-    df_analysis = analyze(st.session_state.matches_df)
-    df_analysis = df_analysis.sort_values(by="Score Sécurité",ascending=False)
-    st.dataframe(df_analysis[["home_team","away_team","Winner","Probabilité victoire","Score Sécurité"]],use_container_width=True)
-
-    st.subheader("💰 Recommandation de mise (Kelly simplifié)")
-    budget_total = st.number_input("Budget total (€)",1,10000,100,step=10)
-    df_analysis["cote_home"] = st.session_state.matches_df["cote_home"]
-    df_analysis["cote_away"] = st.session_state.matches_df["cote_away"]
-    mises=[]
-    for i,row in df_analysis.iterrows():
-        cote = row["cote_home"] if row["Winner"]==row["home_team"] else row["cote_away"]
-        p = row["Probabilité victoire"]/100
-        b = cote-1
-        q = 1-p
-        f_star = max((b*p-q)/b,0)
-        mises.append(round(f_star*budget_total,2))
-    df_analysis["Mise conseillée (€)"]=mises
-    st.dataframe(df_analysis[["home_team","away_team","Winner","Probabilité victoire","Score Sécurité","Mise conseillée (€)"]],use_container_width=True)
-
-    update_form_after_match(df_analysis)
-    st.success("✅ Formes mises à jour automatiquement")
-
-    st.download_button("📥 Télécharger résultats (CSV)", df_analysis.to_csv(index=False).encode("utf-8"), "analyse_matchs.csv","text/csv")
 else:
-    st.info("Ajoute au moins un match pour commencer l’analyse ⚙️")
+    st.warning("⚠️ Ajoute d'abord des équipes avant de pouvoir analyser un match.")
 
-# ---------------- ÉVALUATION DES PRONOSTICS ----------------
-st.subheader("🏁 Évaluer les pronostics passés")
+# ------------------- SUIVI DES RESULTATS & STATISTIQUES -------------------
+st.header("📅 Suivi des résultats & statistiques")
 
-if len(st.session_state.matches_df) > 0:
-    evaluation = []
-    for i, row in st.session_state.matches_df.iterrows():
-        st.markdown(f"**{row['home_team']} vs {row['away_team']}**")
-        real_winner = st.radio(
-            "Résultat réel :",
-            options=[row['home_team'], row['away_team'], "Match nul"],
-            key=f"real_{i}"
-        )
-        evaluation.append({
-            "home_team": row['home_team'],
-            "away_team": row['away_team'],
-            "predicted_winner": row.get("Winner",""),
-            "real_winner": real_winner
-        })
+if historique:
+    df = pd.DataFrame(historique)
+    st.dataframe(df[["home_team","away_team","winner_pred","prob_victoire","resultat","gain"]], use_container_width=True)
 
-    if st.button("✅ Calculer les résultats"):
-        correct = 0
-        for match in evaluation:
-            if match['predicted_winner'] == match['real_winner']:
-                correct += 1
-        total = len(evaluation)
-        st.success(f"Tu as eu {correct} pronostics corrects sur {total} ({round(correct/total*100,2)}%)")
+    # ----- Mettre à jour le résultat d’un match -----
+    st.subheader("📝 Mettre à jour le résultat d’un match")
+    match_index = st.selectbox(
+        "Sélectionne un match",
+        range(len(historique)),
+        format_func=lambda i: f"{historique[i]['home_team']} vs {historique[i]['away_team']}"
+    )
+    resultat = st.selectbox("Résultat réel", ["home","draw","away"])
+    if st.button("✅ Enregistrer le résultat réel"):
+        prono = historique[match_index]
+        cote = prono["cote_home"] if prono["winner_pred"]==prono["home_team"] else prono["cote_away"]
+        if (resultat=="home" and prono["winner_pred"]==prono["home_team"]) or \
+           (resultat=="away" and prono["winner_pred"]==prono["away_team"]):
+            gain = round(prono["mise"]*cote - prono["mise"],2)
+        else:
+            gain = -prono["mise"]
+        prono["resultat"] = resultat
+        prono["gain"] = gain
+        with open(HISTORIQUE_FILE,"w", encoding="utf-8") as f:
+            json.dump(historique,f,indent=2,ensure_ascii=False)
+        st.success(f"Résultat enregistré ✅ (gain : {gain}€)")
 
-        # Sauvegarde historique
-        pronostics_history.extend(evaluation)
-        with open(HISTORY_FILE,"w") as f:
-            json.dump(pronostics_history,f)
-        st.info(f"Historique des pronostics mis à jour ({len(pronostics_history)} entrées)")
+    # ----- Statistiques globales -----
+    df_valides = df[df["resultat"].notna()]
+    if not df_valides.empty:
+        total_gain = df_valides["gain"].sum()
+        nb_pronos = len(df_valides)
+        nb_gagnants = (df_valides["gain"]>0).sum()
+        precision = nb_gagnants/nb_pronos*100
+        roi = (total_gain/(nb_pronos*10))*100
 
-# ---------------- FIN ----------------
+        st.subheader("📊 Statistiques globales")
+        st.metric("🎯 Précision", f"{precision:.2f}%")
+        st.metric("💰 ROI", f"{roi:.2f}%")
+        st.metric("📈 Gain total", f"{total_gain:.2f}€")
+
+        # Graphique profit cumulé
+        df_valides["profit_cumule"] = df_valides["gain"].cumsum()
+        fig, ax = plt.subplots()
+        ax.plot(df_valides["profit_cumule"], marker='o')
+        ax.set_title("Évolution du profit cumulé (€)")
+        ax.set_xlabel("Matchs")
+        ax.set_ylabel("Profit (€)")
+        st.pyplot(fig)
+
+        # Camembert réussite / échec
+        fig2, ax2 = plt.subplots()
+        nb_perdus = nb_pronos - nb_gagnants
+        ax2.pie([nb_gagnants, nb_perdus], labels=["Gagnants","Perdus"], autopct="%1.1f%%", colors=["#4CAF50","#F44336"])
+        ax2.set_title("Répartition des pronostics réussis/échoués")
+        st.pyplot(fig2)
+
+        # Statistiques par équipe
+        st.subheader("🏟️ Statistiques par équipe")
+        equipes_stats = {}
+        for _, row in df_valides.iterrows():
+            for team, won in [(row["home_team"], row["resultat"]=="home"), (row["away_team"], row["resultat"]=="away")]:
+                if team not in equipes_stats:
+                    equipes_stats[team] = {"joues":0,"gagnes":0,"gain":0}
+                equipes_stats[team]["joues"] += 1
+                if won:
+                    equipes_stats[team]["gagnes"] += 1
+                    equipes_stats[team]["gain"] += row["gain"]
+                else:
+                    equipes_stats[team]["gain"] += row["gain"]
+        df_equipes = pd.DataFrame([
+            {"Equipe":team,
+             "Pronostics joués":v["joues"],
+             "Pronostics gagnants":v["gagnes"],
+             "Taux de réussite (%)": round(v["gagnes"]/v["joues"]*100,2),
+             "Gain total (€)": v["gain"]
+            } for team,v in equipes_stats.items()
+        ])
+        st.dataframe(df_equipes.sort_values("Taux de réussite (%)", ascending=False), use_container_width=True)
+
+    # Export CSV
+    st.download_button("📥 Télécharger l’historique complet (CSV)",
+                       df.to_csv(index=False).encode("utf-8"),
+                       "historique_pronos.csv",
+                       "text/csv")
+
+    # Réinitialiser l’historique
+    if st.button("🗑️ Réinitialiser l’historique"):
+        historique.clear()
+        with open(HISTORIQUE_FILE,"w", encoding="utf-8") as f:
+            json.dump(historique,f,indent=2,ensure_ascii=False)
+        st.warning("Historique réinitialisé.")
+else:
+    st.info("Aucun pronostic enregistré pour le moment.")
