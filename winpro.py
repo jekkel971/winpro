@@ -8,6 +8,48 @@ import os
 import json
 from datetime import datetime
 import shutil  # pour copier les fichiers facilement
+import os
+import json
+import shutil
+from datetime import datetime
+import streamlit as st
+
+# --- Fichiers et dossier de sauvegarde ---
+FORM_FILE = "teams_form.json"
+BACKUP_DIR = "sauvegardes"
+
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# --- Création automatique d'une sauvegarde au démarrage ---
+if os.path.exists(FORM_FILE):
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_file = os.path.join(BACKUP_DIR, f"teams_form_backup_{date_str}.json")
+    shutil.copy(FORM_FILE, backup_file)
+
+# --- Interface de gestion des sauvegardes ---
+st.sidebar.header("💾 Gestion des sauvegardes")
+
+# Bouton pour créer une sauvegarde manuelle
+if st.sidebar.button("🧱 Créer une sauvegarde manuelle"):
+    if os.path.exists(FORM_FILE):
+        date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        backup_file = os.path.join(BACKUP_DIR, f"teams_form_backup_{date_str}.json")
+        shutil.copy(FORM_FILE, backup_file)
+        st.sidebar.success(f"Sauvegarde créée : {backup_file}")
+    else:
+        st.sidebar.error("Aucune donnée 'teams_form.json' à sauvegarder.")
+
+# Liste des sauvegardes disponibles
+saves = sorted(os.listdir(BACKUP_DIR), reverse=True)
+if saves:
+    selected_backup = st.sidebar.selectbox("📂 Choisir une sauvegarde à restaurer", saves)
+    if st.sidebar.button("♻️ Restaurer cette sauvegarde"):
+        selected_path = os.path.join(BACKUP_DIR, selected_backup)
+        shutil.copy(selected_path, FORM_FILE)
+        st.sidebar.success(f"Sauvegarde restaurée depuis : {selected_backup}")
+        st.sidebar.info("🔁 Redémarre l’application pour appliquer la restauration.")
+else:
+    st.sidebar.info("Aucune sauvegarde disponible pour le moment.")
 
 # --- Gestion des sauvegardes automatiques ---
 FORM_FILE = "teams_form.json"
@@ -188,4 +230,5 @@ if historique:
         st.warning("Historique réinitialisé.")
 else:
     st.info("Aucun pronostic enregistré pour le moment.")
+
 
