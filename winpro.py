@@ -4,6 +4,24 @@ import numpy as np
 import json
 import os
 import matplotlib.pyplot as plt
+import os
+import json
+from datetime import datetime
+import shutil  # pour copier les fichiers facilement
+
+# --- Gestion des sauvegardes automatiques ---
+FORM_FILE = "teams_form.json"
+BACKUP_DIR = "sauvegardes"
+
+# Crée le dossier "sauvegardes" s'il n'existe pas
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+# Si le fichier principal existe, créer une copie datée
+if os.path.exists(FORM_FILE):
+    date_str = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    backup_file = os.path.join(BACKUP_DIR, f"teams_form_backup_{date_str}.json")
+    shutil.copy(FORM_FILE, backup_file)
+    print(f"✅ Sauvegarde automatique créée : {backup_file}")
 
 st.set_page_config(page_title="Analyseur de matchs avancé", layout="wide")
 
@@ -170,3 +188,4 @@ if historique:
         st.warning("Historique réinitialisé.")
 else:
     st.info("Aucun pronostic enregistré pour le moment.")
+
